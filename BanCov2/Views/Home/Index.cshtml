@@ -1,0 +1,426 @@
+﻿<script src="https://cdn.jsdelivr.net/npm/vue@2.6.10/dist/vue.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/axios/0.19.0/axios.min.js"></script>
+
+<script src="~/js/signalr/dist/browser/signalr.js"></script>
+<style>
+    .chessboard {
+        width: 850px;
+        height: 850px;
+        background-image: url("/Images/bancotuong.jpg");
+        position: absolute;
+    }
+
+    .chessnode {
+        position: absolute;
+        width: 50px;
+        height: 50px;
+    }
+
+    .chessimgnode {
+        width: 50px;
+        height: 50px;
+    }
+</style>
+<div id="app" style="min-height:800px">
+    <div class="chessboard">
+        <div v-for="item in chessNode" class="chessnode"
+             v-on:dragstart="dragStart"
+             v-on:dragend="dragEnd"
+             :id="item.id" v-bind:style="{ display: item.visible, top: item.top + 'px', left: item.left + 'px' }">
+            <img :src="'/' + item.src" class="chessimgnode" />
+        </div>
+    </div>
+</div>
+
+<script>
+    var matrix = [];
+    var app = new Vue({
+        el: '#app',
+        data: {
+            chessNode: [],
+            top: 0,
+            left: 0,
+            currentTurn: 'do' // Red (do) starts first
+        },
+        methods: {
+            getChessNode() {
+                axios({
+                    url: '/api/chess/loadChessBoard',
+                    method: 'GET',
+                    responseType: 'Json',
+                }).then((response) => {
+                    this.chessNode = response.data.chessNode;
+                    matrix = response.data.maxtrix;
+                });
+            },
+            getIndexByTopLef(top, left, matrix) {
+                var obj = {};
+                for (var i = 0; i < matrix.length; i++) {
+                    for (var j = 0; j < matrix[i].length; j++) {
+                        if (Math.abs(matrix[i][j].top - top) < 20 && Math.abs(matrix[i][j].left - left) < 20) {
+                            obj.i = i;
+                            obj.j = j;
+                            obj.id = matrix[i][j].id;
+                            return obj;
+                        }
+                    }
+                }
+                return null;
+            },
+            dragStart(event) {
+                this.top = event.clientY;
+                this.left = event.clientX;
+            },
+            dragEnd(event) {
+                var id = event.currentTarget.id;
+
+                // Check if it's the correct player's turn
+                if ((id.indexOf('do') >= 0 && this.currentTurn !== 'do') ||
+                    (id.indexOf('den') >= 0 && this.currentTurn !== 'den')) {
+                    alert("It's not your turn!");
+                    return; // Invalid move: Not this player's turn
+                }
+
+                var moveX = event.clientX - this.left;
+                var moveY = event.clientY - this.top;
+                moveX = moveX + event.currentTarget.offsetLeft;
+                moveY = moveY + event.currentTarget.offsetTop;
+
+                var nodeStart = this.getIndexByTopLef(event.currentTarget.offsetTop, event.currentTarget.offsetLeft, matrix);
+                var nodeEnd = this.getIndexByTopLef(moveY, moveX, matrix);
+                if (nodeEnd == null) {
+                    return;
+                }
+
+                var objRemove = null;
+                function isValidCapture(id, nodeEndId) {
+                    // If moving a red piece
+                    if (id.indexOf('do') >= 0 && nodeEndId.indexOf('den') >= 0) {
+                        return true; // Red can capture black
+                    }
+                    // If moving a black piece
+                    if (id.indexOf('den') >= 0 && nodeEndId.indexOf('do') >= 0) {
+                        return true; // Black can capture red
+                    }
+                    return false; // Invalid move: can't capture own pieces
+                }
+
+                // Xử lý logic quan Mã
+                if (id.indexOf('ma') >= 0) {
+                    var gapI = Math.abs(nodeEnd.i - nodeStart.i);
+                    var gapJ = Math.abs(nodeEnd.j - nodeStart.j);
+
+                    // Validate knight movement (L-shape)
+                    if (!((gapI == 1 && gapJ == 2) || (gapJ == 1 && gapI == 2))) {
+                        return;
+                    }
+
+                    // Validate no blocking
+                    if ((gapI == 1 && gapJ == 2 && matrix[nodeStart.i][nodeStart.j + (nodeEnd.j > nodeStart.j ? 1 : -1)].id != "") ||
+                        (gapI == 2 && gapJ == 1 && matrix[nodeStart.i + (nodeEnd.i > nodeStart.i ? 1 : -1)][nodeStart.j].id != "")) {
+                        return;
+                    }
+
+                    // Handle capturing logic
+                    if (nodeEnd.id != "") {
+                        if (!isValidCapture(id, nodeEnd.id)) {
+                            return; // Invalid move: can't capture same color
+                        }
+                        objRemove = { id: nodeEnd.id }; // Capture opponent's piece
+                    }
+                }
+
+
+                // xử lý logic quan pháo
+                if (id.indexOf('phao') >= 0) {
+                    var countJump = 0;
+
+                    // Check if moving along the same row (horizontal move)
+                    if (nodeEnd.i === nodeStart.i) {
+                        var step = nodeEnd.j > nodeStart.j ? 1 : -1;
+                        for (var j = nodeStart.j + step; j !== nodeEnd.j; j += step) {
+                            if (matrix[nodeStart.i][j].id != "") {
+                                countJump++;
+                            }
+                        }
+                    }
+                    // Check if moving along the same column (vertical move)
+                    else if (nodeEnd.j === nodeStart.j) {
+                        var step = nodeEnd.i > nodeStart.i ? 1 : -1;
+                        for (var i = nodeStart.i + step; i !== nodeEnd.i; i += step) {
+                            if (matrix[i][nodeStart.j].id != "") {
+                                countJump++;
+                            }
+                        }
+                    }
+                    else {
+                        return; // Invalid move: cannon can only move in straight lines
+                    }
+
+                    // Validate the jump logic for the cannon
+                    if (countJump > 1 || (countJump === 1 && nodeEnd.id === "") || (countJump === 0 && nodeEnd.id !== "")) {
+                        return; // Invalid move
+                    }
+
+                    // Handle capturing logic
+                    if (nodeEnd.id != "") {
+                        if (!isValidCapture(id, nodeEnd.id)) {
+                            return; // Invalid move: can't capture same color
+                        }
+                        objRemove = { id: nodeEnd.id }; // Capture opponent's piece
+                    }
+                }
+
+                //xử lý quân tốt
+                if (id.indexOf('tot') >= 0) {
+                    var validMove = false;
+                    var rowThreshold = (id.indexOf('do') >= 0) ? 5 : 4; // Row 5 for red, row 4 for black
+
+                    // Check if the pawn has crossed the river
+                    var crossedRiver = (id.indexOf('do') >= 0) ? (nodeStart.i >= rowThreshold) : (nodeStart.i <= rowThreshold);
+
+                    // Movement logic before crossing the river
+                    if (!crossedRiver) {
+                        if ((id.indexOf('do') >= 0 && nodeEnd.i === nodeStart.i + 1 && nodeEnd.j === nodeStart.j) || // Red forward
+                            (id.indexOf('den') >= 0 && nodeEnd.i === nodeStart.i - 1 && nodeEnd.j === nodeStart.j)) { // Black forward
+                            validMove = true;
+                        }
+                    }
+                    // Movement logic after crossing the river
+                    else {
+                        if ((id.indexOf('do') >= 0 && (nodeEnd.i === nodeStart.i + 1 || Math.abs(nodeEnd.j - nodeStart.j) === 1)) || // Red forward or sideways
+                            (id.indexOf('den') >= 0 && (nodeEnd.i === nodeStart.i - 1 || Math.abs(nodeEnd.j - nodeStart.j) === 1))) { // Black forward or sideways
+                            validMove = true;
+                        }
+                    }
+
+                    // If not a valid move, return without processing
+                    if (!validMove) {
+                        return;
+                    }
+
+                    // Handle capturing logic
+                    if (nodeEnd.id != "") {
+                        if (!isValidCapture(id, nodeEnd.id)) {
+                            return; // Invalid move: can't capture same color
+                        }
+                        objRemove = { id: nodeEnd.id }; // Capture opponent's piece
+                    }
+                }
+
+                //xử lý quân xe
+
+                if (id.indexOf('xe') >= 0) {
+                    // Check if moving along the same row (horizontal move)
+                    if (nodeEnd.i === nodeStart.i) {
+                        for (var j = Math.min(nodeStart.j, nodeEnd.j) + 1; j < Math.max(nodeStart.j, nodeEnd.j); j++) {
+                            if (matrix[nodeStart.i][j].id != "") {
+                                return; // Invalid move: rook cannot jump over other pieces
+                            }
+                        }
+                    }
+                    // Check if moving along the same column (vertical move)
+                    else if (nodeEnd.j === nodeStart.j) {
+                        for (var i = Math.min(nodeStart.i, nodeEnd.i) + 1; i < Math.max(nodeStart.i, nodeEnd.i); i++) {
+                            if (matrix[i][nodeStart.j].id != "") {
+                                return; // Invalid move: rook cannot jump over other pieces
+                            }
+                        }
+                    } else {
+                        return; // Invalid move: rook can only move in straight lines
+                    }
+
+                    // Handle capturing logic
+                    if (nodeEnd.id != "") {
+                        if (!isValidCapture(id, nodeEnd.id)) {
+                            return; // Invalid move: can't capture same color
+                        }
+                        objRemove = { id: nodeEnd.id }; // Capture opponent's piece
+                    }
+                }
+
+                //xử lý quân tượng
+                if (id.indexOf('tuong') >= 0) {
+                    var gapI = Math.abs(nodeEnd.i - nodeStart.i);
+                    var gapJ = Math.abs(nodeEnd.j - nodeStart.j);
+
+                    // Ensure elephant moves exactly 2 steps diagonally
+                    if (!(gapI === 2 && gapJ === 2)) {
+                        return; // Invalid move: elephant moves exactly two diagonally
+                    }
+
+                    // Check if there's a piece blocking the elephant's path
+                    var midI = (nodeStart.i + nodeEnd.i) / 2;
+                    var midJ = (nodeStart.j + nodeEnd.j) / 2;
+                    if (matrix[midI][midJ].id != "") {
+                        return; // Invalid move: path is blocked
+                    }
+
+                    // Ensure elephant doesn't cross the river
+                    if ((id.indexOf('den') >= 0 && nodeEnd.i < 5) || (id.indexOf('do') >= 0 && nodeEnd.i > 4)) {
+                        return; // Invalid move: elephant can't cross the river
+                    }
+
+                    // Handle capturing logic
+                    if (nodeEnd.id != "") {
+                        if (!isValidCapture(id, nodeEnd.id)) {
+                            return; // Invalid move: can't capture the same color
+                        }
+                        objRemove = { id: nodeEnd.id }; // Capture opponent's piece
+                    }
+                }
+
+
+
+
+
+                //Quy định vị trí cho cung
+                function isWithinPalace(id, i, j) {
+                    // Check for red side (do)
+                    if (id.indexOf('den') >= 0) {
+                        return (i >= 7 && i <= 9 && j >= 3 && j <= 5); // Red palace boundary
+                    }
+                    // Check for black side (den)
+                    else if (id.indexOf('do') >= 0) {
+                        return (i >= 0 && i <= 2 && j >= 3 && j <= 5); // Black palace boundary
+                    }
+                    return false;
+                }
+
+                //xử lý quân sĩ
+                if (id.indexOf('si') >= 0) {
+                    var gapI = Math.abs(nodeEnd.i - nodeStart.i);
+                    var gapJ = Math.abs(nodeEnd.j - nodeStart.j);
+
+                    // Advisor can only move 1 step diagonally
+                    if (!(gapI === 1 && gapJ === 1)) {
+                        return; // Invalid move: advisor moves only 1 step diagonally
+                    }
+
+                    // Ensure advisor stays within the palace
+                    if (!isWithinPalace(id, nodeEnd.i, nodeEnd.j)) {
+                        return; // Invalid move: advisor must stay in the palace
+                    }
+
+                    // Handle capturing logic
+                    if (nodeEnd.id != "") {
+                        if (!isValidCapture(id, nodeEnd.id)) {
+                            return; // Invalid move: can't capture the same color
+                        }
+                        objRemove = { id: nodeEnd.id }; // Capture opponent's piece
+                    }
+                }
+
+
+
+                //xử lý quân tướng
+                if (id.indexOf('vua') >= 0) {  // This specifically checks for the king's ID
+                    var gapI = Math.abs(nodeEnd.i - nodeStart.i);
+                    var gapJ = Math.abs(nodeEnd.j - nodeStart.j);
+
+                    // King moves exactly 1 step horizontally or vertically
+                    if (!((gapI === 1 && gapJ === 0) || (gapI === 0 && gapJ === 1))) {
+                        return; // Invalid move: king can only move 1 step in straight lines
+                    }
+
+                    // Ensure king stays within the palace
+                    if (!isWithinPalace(id, nodeEnd.i, nodeEnd.j)) {
+                        return; // Invalid move: king must stay within the palace
+                    }
+
+                    // Ensure the two kings do not face each other directly without any pieces in between
+                    if (nodeEnd.j === nodeStart.j) {  // Both kings are in the same column
+                        let blocked = false;
+                        if (id.indexOf('do') >= 0) { // Red king
+                            for (var i = nodeEnd.i - 1; i >= 0; i--) {
+                                if (matrix[i][nodeEnd.j].id != "") {
+                                    blocked = true;
+                                    if (matrix[i][nodeEnd.j].indexOf('vuaden') >= 0) {
+                                        return; // Invalid move: kings are facing each other directly
+                                    }
+                                    break; // A piece is in between
+                                }
+                            }
+                        } else if (id.indexOf('den') >= 0) { // Black king
+                            for (var i = nodeEnd.i + 1; i <= 9; i++) {
+                                if (matrix[i][nodeEnd.j].id != "") {
+                                    blocked = true;
+                                    if (matrix[i][nodeEnd.j].indexOf('vuado') >= 0) {
+                                        return; // Invalid move: kings are facing each other directly
+                                    }
+                                    break; // A piece is in between
+                                }
+                            }
+                        }
+
+                        if (!blocked) {
+                            return; // Invalid move: no piece is in between the kings
+                        }
+                    }
+
+                    // Handle capturing logic
+                    if (nodeEnd.id != "") {
+                        if (!isValidCapture(id, nodeEnd.id)) {
+                            return; // Invalid move: can't capture the same color
+                        }
+                        objRemove = { id: nodeEnd.id }; // Capture opponent's piece
+                    }
+                }
+
+
+                
+
+
+
+
+
+                // Prepare parameters for the move
+                let params = new URL(document.location.toString()).searchParams;
+                let roomId = params.get("roomId");
+                var para = [{ id: id, fromi: nodeStart.i, fromj: nodeStart.j, toi: nodeEnd.i, toj: nodeEnd.j }];
+                if (objRemove != null) {
+                    para.push(objRemove);
+                }
+
+                axios({
+                    url: '/api/chess/move-check-node?roomId=' + roomId,
+                    method: 'Post',
+                    responseType: 'Json',
+                    data: para
+                }).then((response) => {
+                    // If move is successful, toggle the turn
+                    this.currentTurn = this.currentTurn === 'do' ? 'den' : 'do';
+                });
+            }
+        },
+        mounted: function () {
+            this.getChessNode();
+            let params = new URL(document.location.toString()).searchParams;
+            let roomId = params.get("roomId");
+            var connection = new signalR.HubConnectionBuilder().withUrl("/chatHub?roomId=" + roomId).build();
+            connection.on("ReceiveChessMove", function (message) {
+                console.log(message);
+                var response = JSON.parse(message);
+                matrix[response[0].fromi][response[0].fromj].id = "";
+                var nodeEnd = matrix[response[0].toi][response[0].toj];
+                nodeEnd.id = response[0].id;
+
+                var obj = document.getElementById(response[0].id);
+                obj.style.top = nodeEnd.top + 'px';
+                obj.style.left = nodeEnd.left + 'px';
+
+                if (response.length > 1) {
+                    var temp = document.getElementById(response[1].id);
+                    temp.style.display = "none";
+                }
+            });
+
+            connection.start().then(function () {
+
+            }).catch(function (err) {
+                return console.error(err.toString());
+            });
+        }
+    });
+
+</script>
